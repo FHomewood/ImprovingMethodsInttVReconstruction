@@ -1,0 +1,214 @@
+#define LooseAnalysis_cxx
+#include "LooseAnalysis.h"
+#include <TH2.h>
+#include <TStyle.h>
+#include <TCanvas.h>
+#include <TLorentzVector.h>
+
+#include <TH1F.h>
+#include <iostream>
+
+void LooseAnalysis::Loop()
+{
+  // Create output file 
+  TFile OutFile("~/MPhys/ttV-and-EFT/RootFiles/nominal_LooseAnalysis.root","RECREATE");
+
+  std::vector<TH1F *> HistVec;
+  
+  // Create histograms
+
+  //initialize global variables
+
+   HistVec.push_back(new TH1F( "jetMass", "jetMass",
+      200,20000,10000));
+   HistVec.push_back(new TH1F( "DeltaR", "DeltaR",
+      20,-5,5));
+   HistVec.push_back(new TH1F( "Z_Mass", "Z_Mass",
+      80,0,200));
+
+
+   if (fChain == 0) return;
+
+   Long64_t nentries = fChain->GetEntriesFast();
+
+   Long64_t nbytes = 0, nb = 0;
+   for (Long64_t jentry=0; jentry<nentries;jentry++) {
+      Long64_t ientry = LoadTree(jentry);
+      if (ientry < 0) break;
+      nb = fChain->GetEntry(jentry);   nbytes += nb;
+      
+      TLorentzVector temp;
+      //Assign all parton variables to four vector arrays
+      std::vector<TLorentzVector> JetList;
+      std::vector<TLorentzVector> bJetList;
+      std::vector<TLorentzVector> LepList;
+      
+      bool isTextBook = 1;
+      
+      for (unsigned int i = 0; i < jet_pt->size(); ++i){
+	temp.SetPtEtaPhiE(jet_pt->at(i),jet_eta->at(i),jet_phi->at(i),jet_e->at(i));
+	if ((int)(jet_isbtagged_MV2c10_77->at(i)) == 1) bJetList.push_back(temp);
+	else JetList.push_back(temp);
+	HistVec[0]->Fill(temp.M());
+      }
+      if (bJetList.size() < 2) isTextBook = 0;
+      std::vector<float> lep_pt  = {pT_1lep,  pT_2lep,  pT_3lep,  pT_4lep };
+      std::vector<float> lep_eta = {eta_1lep, eta_2lep, eta_3lep, eta_4lep};
+      std::vector<float> lep_phi = {phi_1lep, phi_2lep, phi_3lep, phi_4lep};
+      std::vector<float> lep_e   = {e_1lep,   e_2lep,   e_3lep,   e_4lep  };
+      for (int i = 0; i < 4; ++i){
+	temp.SetPtEtaPhiE(lep_pt[i], lep_eta[i], lep_phi[i], lep_e[i]);
+	LepList.push_back(temp);
+      }
+      
+      std::vector<int> lep_charge = {charge_1lep,   charge_2lep,   charge_3lep,   charge_4lep };
+      std::vector<int> lep_flav   = {type_1lep,     type_2lep,     type_3lep,     type_4lep   };
+      
+      // for (auto i : LepList)
+      // for (std::vector<TLorentzVector>::iterator l = LepList.begin(); l != LepList.end(); ++l) i->Charge()
+      
+      //mll test for z boson reconstruction
+      int z1lep = -1;
+      int z2lep = -1;
+      for (int i = 0; i < 4; ++i){
+	for (int j = 0; j < 4; ++j){
+	  if (i < j &&                                 //not the same lepton and not double counted
+	      LepList[i].Pt() != 0 &&                  //the i'th lepton is actually measured
+	      LepList[j].Pt() != 0 &&                  //the j'th lepton is actually measured
+	      lep_flav[i] == lep_flav[j] &&            //same flavour
+	      lep_charge[i] == - lep_charge[j]){       //opposite sign 
+            z1lep = i; //remember z decays
+            z2lep = j;
+            HistVec[2]->Fill((LepList[i] + LepList[j]).M());  // Maybe a better choice in case of more than one SFOS pair is to pick the one with mass closest to the Z boson
+	  }
+	}
+      }
+      
+      if (z1lep < 0 || z2lep < 0) isTextBook = 0;
+      
+      
+      if (jentry == 2){
+	
+	std::cout<<std::endl<< "EVENT: "<< jentry <<std::endl;
+	for (unsigned int i = 0; i < JetList.size(); i++) std::cout<< jet_isbtagged_MV2c10_77->at(i) << "Jet: " << JetList[i].Pt() << std::endl;
+	for (unsigned int i = 0; i < bJetList.size(); i++) std::cout<< "B-Jet: " << bJetList[i].Pt() << std::endl;
+	for (int i = 0; i < 4; i++) std::cout<< "Lepton: " << LepList[i].Pt() << std::endl;
+	
+	for (auto i : JetList)  HistVec[1]->Fill(i.DeltaR(JetList[0]));
+	//for (auto i : bJetList) HistVec[1]->Fill(i.DeltaR(JetList[0]));
+	for (int i = 0; i < 4 ; ++i) {
+          if(i != z1lep && i != z2lep)
+	    
+            HistVec[1]->Fill(LepList[i].DeltaR(JetList[0]));
+	}
+      }
+      
+      if(isTextBook) textbook++;
+      else notTextbook++;
+   
+
+   } // end of loop on entries
+
+   for (auto i : HistVec) i -> Write();
+   OutFile.Close();
+   std::cout<<"Percent Textbook: " << 100 * float(textbook) / (notTextbook + textbook) << "%"<<std::endl;
+   std::cout<<"Finished nominal_Loose Analysis"<<std::endl;
+
+}
+
+bool LooseAnalysis::AddFriend(TTree * tree)
+{
+  if (!tree) return false;
+  l_friendTree = tree;
+  l_friendTree->SetBranchAddress("weight_mc", &MC_weight_mc);
+  l_friendTree->SetBranchAddress("eventNumber", &MC_eventNumber);
+  l_friendTree->SetBranchAddress("runNumber", &MC_runNumber);
+  l_friendTree->SetBranchAddress("weight_pileup", &MC_weight_pileup);
+  l_friendTree->SetBranchAddress("mcChannelNumber", &MC_mcChannelNumber);
+  l_friendTree->SetBranchAddress("PDFinfo_X1", &PDFinfo_X1);
+  l_friendTree->SetBranchAddress("PDFinfo_X2", &PDFinfo_X2);
+  l_friendTree->SetBranchAddress("PDFinfo_PDGID1", &PDFinfo_PDGID1);
+  l_friendTree->SetBranchAddress("PDFinfo_PDGID2", &PDFinfo_PDGID2);
+  l_friendTree->SetBranchAddress("PDFinfo_Q", &PDFinfo_Q);
+  l_friendTree->SetBranchAddress("PDFinfo_XF1", &PDFinfo_XF1);
+  l_friendTree->SetBranchAddress("PDFinfo_XF2", &PDFinfo_XF2);
+  l_friendTree->SetBranchAddress("MC_Z_AncestryCorrupted", &MC_Z_AncestryCorrupted);
+  l_friendTree->SetBranchAddress("MC_Zdecay2_pdgId", &MC_Zdecay2_pdgId);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_t_pdgId", &MC_Wdecay1_from_t_pdgId);
+  l_friendTree->SetBranchAddress("MC_Z_IsOnShell", &MC_Z_IsOnShell);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_t_pdgId", &MC_Wdecay2_from_t_pdgId);
+  l_friendTree->SetBranchAddress("MC_Zdecay1_pdgId", &MC_Zdecay1_pdgId);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_tbar_pdgId", &MC_Wdecay1_from_tbar_pdgId);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_tbar_pdgId", &MC_Wdecay2_from_tbar_pdgId);
+  l_friendTree->SetBranchAddress("MC_Zdecay2_pt", &MC_Zdecay2_pt);
+  l_friendTree->SetBranchAddress("MC_Zdecay2_m", &MC_Zdecay2_m);
+  l_friendTree->SetBranchAddress("MC_Zdecay1_pt", &MC_Zdecay1_pt);
+  l_friendTree->SetBranchAddress("MC_Zdecay2_eta", &MC_Zdecay2_eta);
+  l_friendTree->SetBranchAddress("MC_Zdecay1_m", &MC_Zdecay1_m);
+  l_friendTree->SetBranchAddress("MC_Z_phi", &MC_Z_phi);
+  l_friendTree->SetBranchAddress("MC_Z_pt", &MC_Z_pt);
+  l_friendTree->SetBranchAddress("MC_Z_m", &MC_Z_m);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_tbar_eta", &MC_Wdecay2_from_tbar_eta);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_t_eta", &MC_Wdecay2_from_t_eta);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_t_pt", &MC_Wdecay2_from_t_pt);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_tbar_eta", &MC_Wdecay1_from_tbar_eta);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_tbar_pt", &MC_Wdecay1_from_tbar_pt);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_tbar_m", &MC_Wdecay1_from_tbar_m);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_t_phi", &MC_Wdecay1_from_t_phi);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_t_pt", &MC_Wdecay1_from_t_pt);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_tbar_pt", &MC_Wdecay2_from_tbar_pt);
+  l_friendTree->SetBranchAddress("MC_b_from_tbar_eta", &MC_b_from_tbar_eta);
+  l_friendTree->SetBranchAddress("MC_b_from_tbar_m", &MC_b_from_tbar_m);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_t_m", &MC_Wdecay2_from_t_m);
+  l_friendTree->SetBranchAddress("MC_b_from_t_phi", &MC_b_from_t_phi);
+  l_friendTree->SetBranchAddress("MC_t_afterFSR_pt", &MC_t_afterFSR_pt);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_tbar_phi", &MC_Wdecay2_from_tbar_phi);
+  l_friendTree->SetBranchAddress("MC_ttbar_beforeFSR_eta", &MC_ttbar_beforeFSR_eta);
+  l_friendTree->SetBranchAddress("MC_t_afterFSR_m", &MC_t_afterFSR_m);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_beforeDecay_phi", &MC_ttbar_afterFSR_beforeDecay_phi);
+  l_friendTree->SetBranchAddress("MC_t_beforeFSR_eta", &MC_t_beforeFSR_eta);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_beforeDecay_eta", &MC_ttbar_afterFSR_beforeDecay_eta);
+  l_friendTree->SetBranchAddress("MC_t_afterFSR_eta", &MC_t_afterFSR_eta);
+  l_friendTree->SetBranchAddress("MC_tbar_beforeFSR_m", &MC_tbar_beforeFSR_m);
+  l_friendTree->SetBranchAddress("MC_ttbar_beforeFSR_phi", &MC_ttbar_beforeFSR_phi);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_phi", &MC_ttbar_afterFSR_phi);
+  l_friendTree->SetBranchAddress("MC_ttbar_beforeFSR_pt", &MC_ttbar_beforeFSR_pt);
+  l_friendTree->SetBranchAddress("MC_ttbar_beforeFSR_m", &MC_ttbar_beforeFSR_m);
+  l_friendTree->SetBranchAddress("MC_W_from_t_pt", &MC_W_from_t_pt);
+  l_friendTree->SetBranchAddress("MC_b_from_t_eta", &MC_b_from_t_eta);
+  l_friendTree->SetBranchAddress("MC_tbar_afterFSR_phi", &MC_tbar_afterFSR_phi);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_pt", &MC_ttbar_afterFSR_pt);
+  l_friendTree->SetBranchAddress("MC_Zdecay1_phi", &MC_Zdecay1_phi);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_tbar_phi", &MC_Wdecay1_from_tbar_phi);
+  l_friendTree->SetBranchAddress("MC_t_beforeFSR_phi", &MC_t_beforeFSR_phi);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_m", &MC_ttbar_afterFSR_m);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_eta", &MC_ttbar_afterFSR_eta);
+  l_friendTree->SetBranchAddress("MC_Z_eta", &MC_Z_eta);
+  l_friendTree->SetBranchAddress("MC_t_afterFSR_phi", &MC_t_afterFSR_phi);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_beforeDecay_pt", &MC_ttbar_afterFSR_beforeDecay_pt);
+  l_friendTree->SetBranchAddress("MC_ttbar_afterFSR_beforeDecay_m", &MC_ttbar_afterFSR_beforeDecay_m);
+  l_friendTree->SetBranchAddress("MC_b_from_t_pt", &MC_b_from_t_pt);
+  l_friendTree->SetBranchAddress("MC_t_beforeFSR_m", &MC_t_beforeFSR_m);
+  l_friendTree->SetBranchAddress("MC_Zdecay1_eta", &MC_Zdecay1_eta);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_tbar_m", &MC_Wdecay2_from_tbar_m);
+  l_friendTree->SetBranchAddress("MC_tbar_beforeFSR_eta", &MC_tbar_beforeFSR_eta);
+  l_friendTree->SetBranchAddress("MC_Zdecay2_phi", &MC_Zdecay2_phi);
+  l_friendTree->SetBranchAddress("MC_tbar_afterFSR_m", &MC_tbar_afterFSR_m);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_t_m", &MC_Wdecay1_from_t_m);
+  l_friendTree->SetBranchAddress("MC_tbar_beforeFSR_phi", &MC_tbar_beforeFSR_phi);
+  l_friendTree->SetBranchAddress("MC_b_from_tbar_pt", &MC_b_from_tbar_pt);
+  l_friendTree->SetBranchAddress("MC_W_from_t_eta", &MC_W_from_t_eta);
+  l_friendTree->SetBranchAddress("MC_tbar_afterFSR_pt", &MC_tbar_afterFSR_pt);
+  l_friendTree->SetBranchAddress("MC_b_from_t_m", &MC_b_from_t_m);
+  l_friendTree->SetBranchAddress("MC_tbar_beforeFSR_pt", &MC_tbar_beforeFSR_pt);
+  l_friendTree->SetBranchAddress("MC_W_from_tbar_pt", &MC_W_from_tbar_pt);
+  l_friendTree->SetBranchAddress("MC_tbar_afterFSR_eta", &MC_tbar_afterFSR_eta);
+  l_friendTree->SetBranchAddress("MC_Wdecay1_from_t_eta", &MC_Wdecay1_from_t_eta);
+  l_friendTree->SetBranchAddress("MC_W_from_t_m", &MC_W_from_t_m);
+  l_friendTree->SetBranchAddress("MC_b_from_tbar_phi", &MC_b_from_tbar_phi);
+  l_friendTree->SetBranchAddress("MC_W_from_t_phi", &MC_W_from_t_phi);
+  l_friendTree->SetBranchAddress("MC_Wdecay2_from_t_phi", &MC_Wdecay2_from_t_phi);
+  l_friendTree->SetBranchAddress("MC_W_from_tbar_m", &MC_W_from_tbar_m);
+  l_friendTree->SetBranchAddress("MC_W_from_tbar_eta", &MC_W_from_tbar_eta);
+  l_friendTree->SetBranchAddress("MC_t_beforeFSR_pt", &MC_t_beforeFSR_pt);
+  l_friendTree->SetBranchAddress("MC_W_from_tbar_phi", &MC_W_from_tbar_phi);
